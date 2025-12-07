@@ -290,6 +290,10 @@ async fn upload_file_as_form_data(
     Ok(())
 }
 
+// TODO: for now we return PID of launched program, but application can spawn actual program
+//       and then terminate entrypoint program. Ideally we should track all children spawned
+//       by entrypoint. When we will do that here we should return not PID, but some key
+//       which can be used to query/wait when application terminated.
 #[tauri::command]
 async fn launch_app(app_id: String, app_data_path: State<'_, AppDataPath>) -> Result<u32, String> {
     let app_data_path = &app_data_path.inner().0;
