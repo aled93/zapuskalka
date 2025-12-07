@@ -3,17 +3,23 @@ use flate2::{read::GzDecoder, write::GzEncoder};
 use serde::Serialize;
 use std::collections::VecDeque;
 use std::fs::File;
-use std::io::{BufWriter, Read};
+use std::io::{BufReader, BufWriter, Read};
 use std::path::Path;
+use std::process::Command;
 use tar::{Archive, Builder};
+use tauri::State;
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     LogicalPosition, LogicalSize, Manager,
 };
 
+use crate::models::InstalledAppInfo;
+use crate::states::AppDataPath;
 use crate::tracking_writer::TrackingWriter;
 
+mod models;
+mod states;
 mod tracking_writer;
 
 #[derive(Serialize)]
@@ -284,6 +290,29 @@ async fn upload_file_as_form_data(
     Ok(())
 }
 
+#[tauri::command]
+async fn launch_app(app_id: String, app_data_path: State<'_, AppDataPath>) -> Result<u32, String> {
+    let app_data_path = &app_data_path.inner().0;
+    let app_json_path = app_data_path.join(format!("apps/{}.json", app_id));
+
+    let file =
+        File::open(app_json_path).map_err(|e| format!("Failed to open app json file: {}", e))?;
+    let reader = BufReader::new(file);
+    let app_info = serde_json::from_reader::<_, InstalledAppInfo>(reader)
+        .map_err(|e| format!("Failed to parse app json: {}", e))?;
+
+    let entrypoint_path = app_info.install_dir.join(app_info.entrypoint);
+    if !entrypoint_path.exists() {
+        return Err("entrypoint doesn't exists".to_string());
+    }
+
+    let app_child = Command::new(entrypoint_path)
+        .spawn()
+        .map_err(|e| format!("Failed to spawn app process: {}", e))?;
+
+    Ok(app_child.id())
+}
+
 #[derive(serde::Serialize, serde::Deserialize)]
 struct WindowState {
     width: f64,
@@ -542,6 +571,8 @@ pub fn run() {
                 .build(app)
                 .map_err(|e| format!("Failed to create tray icon: {}", e))?;
 
+            app.manage(AppDataPath(app.path().app_data_dir()?));
+
             Ok(())
         })
         .plugin(tauri_plugin_opener::init())
@@ -549,7 +580,8 @@ pub fn run() {
             archive_and_compress_folder,
             read_file_bytes,
             extract_archive,
-            upload_file_as_form_data
+            upload_file_as_form_data,
+            launch_app,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
